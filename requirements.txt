@@ -1,0 +1,6 @@
+datasets
+ipywidgets
+jinja2
+pandas
+torch
+transformers
