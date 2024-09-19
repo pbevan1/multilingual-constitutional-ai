@@ -5,3 +5,4 @@ pandas
 torch
 transformers
 google-cloud-translate
+text-generation

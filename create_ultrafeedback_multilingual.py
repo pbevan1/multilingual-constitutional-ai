@@ -6,6 +6,7 @@ from tqdm import tqdm
 from google.cloud import translate_v3 as translate
 from google.oauth2 import service_account
 import logging
+from itertools import islice
 
 
 def content_length_check(item):
