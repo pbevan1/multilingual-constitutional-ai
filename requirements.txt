@@ -4,3 +4,4 @@ jinja2
 pandas
 torch
 transformers
+google-cloud-translate
