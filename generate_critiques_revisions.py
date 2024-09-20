@@ -10,6 +10,7 @@ from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
 
 @dataclass
 class Args:
+    model: str = "mistralai/Mistral-Nemo-Instruct-2407"
     max_samples: int = 128
     max_new_tokens: int = 1500
     temperature: float = 1.0
@@ -21,13 +22,14 @@ class Args:
 parser = HfArgumentParser((Args,))
 args = parser.parse_args_into_dataclasses()[0]
 
-engine_args = AsyncEngineArgs(model="CohereForAI/aya-23-8B", tensor_parallel_size=args.tensor_parallel_size)
+engine_args = AsyncEngineArgs(model=args.model, tensor_parallel_size=args.tensor_parallel_size)
 engine = AsyncLLMEngine.from_engine_args(engine_args)
 
-tokenizer = AutoTokenizer.from_pretrained("CohereForAI/aya-23-8B")
+tokenizer = AutoTokenizer.from_pretrained(args.model)
 tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
-ds = load_dataset(args.constitution_dataset)["train"]
+ds = load_dataset(args.constitution_dataset)["train"].select(range(20))
+
 
 critiques = ds['all_critiques_translated'][0]
 revisions = ds['all_revisions_translated'][0]
@@ -45,15 +47,16 @@ async def generate_text(prompt):
         if output.finished:
             return output.outputs[0].text
 
-async def process_text(i, task, language):
+async def process_text(i, prompt, language):
     system_chat = system_chats.get(language)
     chat = [{"role": "system", "content": system_chat}]
     random_choice = random.choice(range(16))
     row = {"language": language}
-    for prompt, prompt_key, response_key in [
-        (task, "init_prompt", "init_response"),
-        (critiques[random_choice], "critic_prompt", "critic_response"),
-        (revisions[random_choice], "revision_prompt", "revision_response"),
+    
+    for prompt_key, response_key in [
+        ("init_prompt", "init_response"),
+        ("critic_prompt", "critic_response"),
+        ("revision_prompt", "revision_response"),
     ]:
         chat.append({"role": "user", "content": prompt})
         formatted_prompt = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in chat]) + "\nAssistant:"
@@ -66,6 +69,7 @@ async def process_text(i, task, language):
         chat.append({"role": "assistant", "content": completion})
         row[prompt_key] = prompt
         row[response_key] = completion
+    
     return i, len(tokenizer.encode(completion)), row
 
 def process_results(results):
@@ -85,42 +89,30 @@ def process_results(results):
     return processed_dataset
 
 async def main():
-    batch_size = 10  # Adjust this based on your system's capabilities
     all_results = []
 
     print(f"Dataset type: {type(ds)}")
-    print(f"First item type: {type(ds[0])}")
-    print(f"First item: {ds[0]}")
+    print(f"Dataset columns: {ds.column_names}")
+    print(f"Number of rows: {len(ds)}")
 
-    for i in range(0, len(ds), batch_size):
-        batch = ds[i:i+batch_size]
-        tasks = []
-        for idx, row in enumerate(batch):
-            try:
-                if isinstance(row, dict):
-                    prompt = row.get("prompt")
-                    language = row.get("language")
-                elif isinstance(row, str):
-                    # If row is a string, we need to decide how to handle it
-                    # For now, let's assume the whole string is the prompt and use a default language
-                    prompt = row
-                    language = "unknown"
-                else:
-                    print(f"Unexpected row type: {type(row)}")
-                    continue
+    # Get all the data at once
+    all_data = ds[:]
 
-                if prompt and language:
-                    tasks.append(process_text(idx + i, prompt, language))
-                else:
-                    print(f"Missing prompt or language for row {idx + i}")
-            except Exception as e:
-                print(f"Error processing row {idx + i}: {str(e)}")
-
+    for i in range(len(ds)):
         try:
-            results = await tqdm_asyncio.gather(*tasks)
-            all_results.extend([r for r in results if r])
+            prompt = all_data['prompt'][i]
+            language = all_data['language'][i]
+
+            if prompt and language:
+                result = await process_text(i, prompt, language)
+                if result:
+                    all_results.append(result)
+            else:
+                print(f"Missing prompt or language for row {i}")
+                print(f"Prompt: {prompt}, Language: {language}")
         except Exception as e:
-            print(f"Error processing batch {i//batch_size}: {str(e)}")
+            print(f"Error processing row {i}: {str(e)}")
+            print(f"Row content: {[all_data[col][i] for col in ds.column_names]}")
 
     processed_dataset = process_results(all_results)
     
