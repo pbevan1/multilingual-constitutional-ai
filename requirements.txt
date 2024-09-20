@@ -5,4 +5,6 @@ pandas
 torch
 transformers
 google-cloud-translate
-text-generation
+vllm
+tenacity
+text_generation
