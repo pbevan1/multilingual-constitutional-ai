@@ -1,45 +1,23 @@
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
+import json
 import uuid
 import random
 from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer, HfArgumentParser
-from tqdm.asyncio import tqdm_asyncio
 from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
 
 @dataclass
 class Args:
-    model: str = "mistralai/Mistral-Nemo-Instruct-2407"
+    model: str = "natong19/Mistral-Nemo-Instruct-2407-abliterated"
     max_samples: int = 128
-    max_new_tokens: int = 1500
-    temperature: float = 1.0
+    max_new_tokens: int = 1024
+    temperature: float = 0.3
     constitution_dataset: str = "pbevan11/aya_redteaming_consitutional"
     repo_id: str = "multilingual-constitutional-ai"
     push_to_hub: bool = True
     tensor_parallel_size: int = 1
-
-parser = HfArgumentParser((Args,))
-args = parser.parse_args_into_dataclasses()[0]
-
-engine_args = AsyncEngineArgs(model=args.model, tensor_parallel_size=args.tensor_parallel_size)
-engine = AsyncLLMEngine.from_engine_args(engine_args)
-
-tokenizer = AutoTokenizer.from_pretrained(args.model)
-tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-
-ds = load_dataset(args.constitution_dataset)["train"].select(range(20))
-
-
-critiques = ds['all_critiques_translated'][0]
-revisions = ds['all_revisions_translated'][0]
-system_chats = {}
-for language in set(ds['language']):
-    with open(f'data/few_shot_translations/hf_fewshot_{language}.txt', 'r') as f:
-        system_chats[language] = f.read()
-
-STOP_SEQ = ["User:", "###", "<|endoftext|>"]
-sampling_params = SamplingParams(temperature=args.temperature, max_tokens=args.max_new_tokens, stop=STOP_SEQ)
 
 async def generate_text(prompt):
     request_id = str(uuid.uuid4())
@@ -48,18 +26,23 @@ async def generate_text(prompt):
             return output.outputs[0].text
 
 async def process_text(i, prompt, language):
-    system_chat = system_chats.get(language)
-    chat = [{"role": "system", "content": system_chat}]
-    random_choice = random.choice(range(16))
+    row_critiques = critiques_eng[i] if language == 'English' else critiques_translated[i]
+    row_revisions = revisions_eng[i] if language == 'English' else revisions_translated[i]
+
+    chat = []
     row = {"language": language}
+
+    system_chat = system_chats.get(language, [])
+    system_chat = [item for sublist in system_chat for item in sublist]
     
-    for prompt_key, response_key in [
-        ("init_prompt", "init_response"),
-        ("critic_prompt", "critic_response"),
-        ("revision_prompt", "revision_response"),
+    for prompt_key, response_key, next_prompt_fn in [
+        ("init_prompt", "init_response", lambda: random.choice(row_critiques)),
+        ("critic_prompt", "critic_response", lambda: random.choice(row_revisions)),
+        ("revision_prompt", "revision_response", lambda: None),
     ]:
         chat.append({"role": "user", "content": prompt})
-        formatted_prompt = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in chat]) + "\nAssistant:"
+        full_prompt = system_chat + chat
+        formatted_prompt = tokenizer.apply_chat_template(full_prompt, tokenize=False, add_generation_prompt=True)
         completion = await generate_text(formatted_prompt)
         
         for stop_seq in STOP_SEQ:
@@ -69,64 +52,39 @@ async def process_text(i, prompt, language):
         chat.append({"role": "assistant", "content": completion})
         row[prompt_key] = prompt
         row[response_key] = completion
+        prompt = next_prompt_fn()
     
-    return i, len(tokenizer.encode(completion)), row
+    return i, len(tokenizer.encode(chat[-1]["content"])), row
 
 def process_results(results):
     all_data = defaultdict(list)
-
     for result in results:
         if result:
-            row_data = result[2]  # Extract the row data dictionary
-            
-            # Add each key-value pair in row_data to all_data
+            row_data = result[2]
             for key, value in row_data.items():
                 all_data[key].append(value)
-
-    # Convert all_data into a dataset
-    processed_dataset = Dataset.from_dict(all_data)
-        
-    return processed_dataset
+    return Dataset.from_dict(all_data)
 
 async def main():
     all_results = []
-
-    print(f"Dataset type: {type(ds)}")
-    print(f"Dataset columns: {ds.column_names}")
-    print(f"Number of rows: {len(ds)}")
-
-    # Get all the data at once
     all_data = ds[:]
 
     for i in range(len(ds)):
         try:
             prompt = all_data['prompt'][i]
             language = all_data['language'][i]
-
-            if prompt and language:
-                result = await process_text(i, prompt, language)
-                if result:
-                    all_results.append(result)
-            else:
-                print(f"Missing prompt or language for row {i}")
-                print(f"Prompt: {prompt}, Language: {language}")
+            result = await process_text(i, prompt, language)
+            if result:
+                all_results.append(result)
         except Exception as e:
             print(f"Error processing row {i}: {str(e)}")
-            print(f"Row content: {[all_data[col][i] for col in ds.column_names]}")
 
     processed_dataset = process_results(all_results)
-    
-    print("Processed dataset:")
-    print(processed_dataset)
 
     if processed_dataset:
         def process(example):
             return {
                 "prompt": example["init_prompt"].strip(),
-                "messages": [
-                    {"role": "user", "content": example["init_prompt"].strip()},
-                    {"role": "assistant", "content": example["revision_response"].strip()},
-                ],
                 "chosen": [
                     {"role": "user", "content": example["init_prompt"].strip()},
                     {"role": "assistant", "content": example["revision_response"].strip()},
@@ -135,21 +93,42 @@ async def main():
                     {"role": "user", "content": example["init_prompt"].strip()},
                     {"role": "assistant", "content": example["init_response"].strip()},
                 ],
-                "language": example["language"],  # Add language column
+                "language": example["language"],
+                "critic_response": example["critic_response"].strip(),
             }
 
         post_ds = processed_dataset.map(process, remove_columns=processed_dataset.column_names)
-
-        # Shuffle the dataset
         shuffled_ds = post_ds.shuffle(seed=42)
 
         if args.push_to_hub:
-            # Calculate the midpoint
             midpoint = len(shuffled_ds) // 2
-
-            # Split and push to hub
             shuffled_ds.select(range(midpoint)).push_to_hub(args.repo_id, split="train_sft")
             shuffled_ds.select(range(midpoint, len(shuffled_ds))).push_to_hub(args.repo_id, split="train_prefs")
 
+
 if __name__ == "__main__":
+    parser = HfArgumentParser((Args,))
+    args = parser.parse_args_into_dataclasses()[0]
+    
+    engine_args = AsyncEngineArgs(model=args.model, tensor_parallel_size=args.tensor_parallel_size, max_model_len=4096)
+    engine = AsyncLLMEngine.from_engine_args(engine_args)
+    
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+
+    ds = load_dataset(args.constitution_dataset)["train"]
+    
+    critiques_eng = ds['all_critiques_eng']
+    revisions_eng = ds['all_revisions_eng']
+    critiques_translated = ds['all_critiques_translated']
+    revisions_translated = ds['all_revisions_translated']
+
+    system_chats = {}
+    for language in set(ds['language']):
+        with open(f'data/few_shot_translations/hf_fewshot_{language}.txt', 'r') as f:
+            system_chats[language] = json.load(f)
+    
+    STOP_SEQ = ["User:", "###", "<|endoftext|>"]
+    sampling_params = SamplingParams(temperature=args.temperature, max_tokens=args.max_new_tokens, stop=STOP_SEQ)
+    
     asyncio.run(main())
