@@ -8,3 +8,8 @@ google-cloud-translate
 vllm
 tenacity
 text_generation
+accelerate
+deepspeed
+alignment-handbook
+huggingface-hub
+wandb
