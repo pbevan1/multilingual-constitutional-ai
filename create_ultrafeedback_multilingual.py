@@ -2,11 +2,12 @@ import json
 from datasets import Dataset, DatasetDict, load_dataset
 from huggingface_hub import HfApi, create_repo
 import os
+import pandas as pd
 from tqdm import tqdm
-from google.cloud import translate_v3 as translate
-from google.oauth2 import service_account
+import torch
 import logging
 from itertools import islice
+from transformers import AutoTokenizer, pipeline, AutoModelForSeq2SeqLM
 
 
 def content_length_check(item):
@@ -39,78 +40,53 @@ def load_filtered_dataset(num_samples=10000, seed=42):
     return list(islice(filtered_dataset, num_samples))
 
 
-def batch_translate(texts, target_language):
-    parent = f"projects/{project_id}/locations/global"
-    response = client.translate_text(
-        parent=parent,
-        contents=texts,
-        target_language_code=target_language,
-        mime_type='text/plain'
-    )
-    return [translation.translated_text for translation in response.translations]
+def translate(model, tokenizer, text, target_language, source_language='English', max_tokens=512):
+    translation = pipeline('translation',
+                            model=model,
+                            tokenizer=tokenizer, 
+                            src_lang=flores_200_mapping[source_language],
+                            tgt_lang=flores_200_mapping[target_language],
+                            max_length=max_tokens,
+                            device=0)
+    result = translation(text)
+    return result[0]['translation_text']
 
-def translate_items_batch(items, target_language):
-    texts_to_translate = []
-    text_indices = []
+
+def translate_item(model, tokenizer, item, target_language):
+    translated_item = item.copy()
     
-    for item_index, item in enumerate(items):
-        item_texts = [item['prompt']] + [msg['content'] for msg in item['chosen']] + [msg['content'] for msg in item['rejected']]
-        non_empty_texts = [text for text in item_texts if text.strip()]
-        
-        if non_empty_texts:
-            texts_to_translate.extend(non_empty_texts)
-            text_indices.extend([(item_index, i) for i in range(len(non_empty_texts))])
+    # Translate the prompt once
+    translated_prompt = translate(model, tokenizer, item['prompt'], target_language, max_tokens=1024)
+    translated_item['prompt'] = translated_prompt
     
-    if not texts_to_translate:
-        return []
+    # Translate 'chosen' content
+    translated_chosen = []
+    for message in item['chosen']:
+        translated_message = message.copy()
+        if message['content'] == item['prompt']:
+            # Reuse the translated prompt if the content matches the original prompt
+            translated_message['content'] = translated_prompt
+        else:
+            translated_message['content'] = translate(model, tokenizer, message['content'], target_language, max_tokens=1024)
+        translated_chosen.append(translated_message)
+    translated_item['chosen'] = translated_chosen
     
-    translated_texts = batch_translate(texts_to_translate, target_language)
+    # Translate 'rejected' content
+    translated_rejected = []
+    for message in item['rejected']:
+        translated_message = message.copy()
+        if message['content'] == item['prompt']:
+            # Reuse the translated prompt if the content matches the original prompt
+            translated_message['content'] = translated_prompt
+        else:
+            translated_message['content'] = translate(message['content'], target_language, max_tokens=1024)
+        translated_rejected.append(translated_message)
+    translated_item['rejected'] = translated_rejected
     
-    if len(translated_texts) != len(texts_to_translate):
-        logging.error(f"Mismatch in translation count. Expected {len(texts_to_translate)}, got {len(translated_texts)}")
-        return []
+    # Remove 'messages' field
+    translated_item.pop('messages', None)
     
-    translated_items = []
-    for item_index, item in enumerate(items):
-        if item_index not in [idx[0] for idx in text_indices]:
-            continue  # Skip items with no content to translate
-        
-        item_translations = [translated_texts[i] for i, (idx, _) in enumerate(text_indices) if idx == item_index]
-        
-        non_empty_count = sum(1 for text in [item['prompt']] + [msg['content'] for msg in item['chosen']] + [msg['content'] for msg in item['rejected']] if text.strip())
-        
-        if len(item_translations) != non_empty_count:
-            logging.warning(f"Mismatch in translation count for item {item_index}. Skipping.")
-            continue
-        
-        translated_item = item.copy()
-        translation_index = 0
-        
-        if item['prompt'].strip():
-            translated_item['prompt'] = item_translations[translation_index]
-            translation_index += 1
-        
-        translated_chosen = []
-        for message in item['chosen']:
-            translated_message = message.copy()
-            if message['content'].strip():
-                translated_message['content'] = item_translations[translation_index]
-                translation_index += 1
-            translated_chosen.append(translated_message)
-        translated_item['chosen'] = translated_chosen
-        
-        translated_rejected = []
-        for message in item['rejected']:
-            translated_message = message.copy()
-            if message['content'].strip():
-                translated_message['content'] = item_translations[translation_index]
-                translation_index += 1
-            translated_rejected.append(translated_message)
-        translated_item['rejected'] = translated_rejected
-        
-        translated_items.append(translated_item)
-    
-    return translated_items
+    return translated_item
 
 
 def load_jsonl(file_path):
@@ -121,7 +97,7 @@ def load_jsonl(file_path):
 def create_dataset():
     dataset_dict = DatasetDict()
     
-    for lang, lang_full in zip(target_languages, target_languages_full):
+    for lang, lang_full in zip(target_languages, target_languages):
         file_path = f'data/ultrafeedback_binarized_translations/{lang.lower()}_translations.jsonl'
         data = load_jsonl(file_path)
         
@@ -146,59 +122,45 @@ def upload_to_huggingface(dataset_dict, repo_name):
 
 # Main execution
 if __name__ == "__main__":
-    gct_mapping = {
-        'English': 'en',
-        'Arabic': 'ar',
-        'Filipino': 'fil',
-        'French': 'fr',
-        'Hindi': 'hi',
-        'Russian': 'ru',
-        'Serbian': 'sr',
-        'Spanish': 'es'
-    }
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+
+    checkpoint = 'facebook/nllb-200-3.3B'
+    model = AutoModelForSeq2SeqLM.from_pretrained(checkpoint).to(device)
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint, clean_up_tokenization_spaces=True)
+
+    flores_200_mapping = {'Arabic': 'arb_Arab',
+    'English': 'eng_Latn',
+    'Filipino': 'tgl_Latn',
+    'French': 'fra_Latn',
+    'Hindi': 'hin_Deva',
+    'Russian': 'rus_Cyrl',
+    'Serbian': 'srp_Cyrl',
+    'Spanish': 'spa_Latn'}
+
+    target_languages = [lang for lang in flores_200_mapping.keys() if lang != 'English']
+
     # Load 10,000 suitable samples
     dataset_ufb = load_filtered_dataset(num_samples=10000, seed=42)
-    
+
     print(f"Loaded {len(dataset_ufb)} suitable samples.")
     df_ufb = pd.DataFrame(dataset_ufb)
 
-    credentials = service_account.Credentials.from_service_account_file('credentials/translate_sa_key.json')
-    client = translate.TranslationServiceClient(credentials=credentials)
-    
-    target_languages = list(gct_mapping.values())
-    target_languages_full = list(gct_mapping.keys())
-    
-    # Your Google Cloud project ID
-    project_id = "spry-optics-420515"
-
     # Ensure output directory exists
     os.makedirs('data/ultrafeedback_binarized_translations', exist_ok=True)
-    
+
     # Process the dataset for each language
-    batch_size = 5  # Adjust based on your needs and API limits
-    
     for lang in target_languages:
         output_file = f'data/ultrafeedback_binarized_translations/{lang.lower()}_translations.jsonl'
         
-        with open(output_file, 'w', encoding='utf-8') as outfile:
-            batch = []
+        with open(output_file, 'w', encoding='utf-8') as jsonl_file:
             for item in tqdm(dataset_ufb, desc=f"Translating to {lang}"):
-                batch.append(item)
+                translated_item = translate_item(model, tokenizer, item, lang)
                 
-                if len(batch) == batch_size:
-                    translated_items = translate_items_batch(batch, lang)
-                    for translated_item in translated_items:
-                        json.dump(translated_item, outfile, ensure_ascii=False)
-                        outfile.write('\n')
-                    batch = []
-            
-            # Process any remaining items
-            if batch:
-                translated_items = translate_items_batch(batch, lang)
-                for translated_item in translated_items:
-                    json.dump(translated_item, outfile, ensure_ascii=False)
-                    outfile.write('\n')
-    
+                # Write the translated item as a JSON line
+                json.dump(translated_item, jsonl_file, ensure_ascii=False)
+                jsonl_file.write('\n')  # Add a newline after each JSON object
+
     print("Translation and JSONL creation complete for all languages.")
     
     repo_name = "pbevan11/ultrafeedback_binarized_multilingual"
