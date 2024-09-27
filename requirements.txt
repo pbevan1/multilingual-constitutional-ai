@@ -13,3 +13,4 @@ deepspeed
 alignment-handbook
 huggingface-hub
 wandb
+wheel

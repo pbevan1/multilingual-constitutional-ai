@@ -6,10 +6,11 @@ attn_implementation: flash_attention_2
 # Data training arguments
 chat_template: "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
 dataset_mixer:
-  pbevan11/multilingual-constitutional-preference-pairs_with_messages: 1.0
-  pbevan11/ultrafeedback_binarized_multilingual_all_with_messages: 0.85
+  pbevan11/multilingual-constitutional-preference-pairs: 1.0
+  pbevan11/ultrafeedback_binarized_multilingual: 0.85
 dataset_splits:
 - train_sft
+- test_sft
 preprocessing_num_workers: 12
 # SFT trainer config
 bf16: true
@@ -27,7 +28,7 @@ log_level: info
 logging_steps: 5
 logging_strategy: steps
 lr_scheduler_type: cosine
-max_seq_length: 2048
+max_seq_length: 512
 max_steps: -1
 num_train_epochs: 1
 output_dir: models/Mistral-Nemo-Multilingual-Constitutional-AI
