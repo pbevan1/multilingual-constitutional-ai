@@ -7,7 +7,7 @@ attn_implementation: flash_attention_2
 chat_template: "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
 dataset_mixer:
   pbevan11/multilingual-constitutional-preference-pairs: 1.0
-  pbevan11/ultrafeedback_binarized_multilingual: 0.85
+  pbevan11/ultrafeedback_binarized_multilingual: 0.45
 dataset_splits:
 - train_sft
 - test_sft
@@ -21,17 +21,17 @@ gradient_accumulation_steps: 4
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: False
-hub_model_id: Mistral-Nemo-Multilingual-Constitutional-AI
+hub_model_id: Mistral-Nemo-Multilingual-Constitutional-AI-SFT
 hub_strategy: every_save
 learning_rate: 2.0e-05
 log_level: info
 logging_steps: 5
 logging_strategy: steps
 lr_scheduler_type: cosine
-max_seq_length: 512
+max_seq_length: 2048
 max_steps: -1
 num_train_epochs: 1
-output_dir: models/Mistral-Nemo-Multilingual-Constitutional-AI
+output_dir: models/Mistral-Nemo-Multilingual-Constitutional-AI-SFT
 overwrite_output_dir: true
 per_device_eval_batch_size: 8
 per_device_train_batch_size: 8
