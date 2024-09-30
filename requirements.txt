@@ -2,10 +2,10 @@ datasets
 ipywidgets
 jinja2
 pandas
-torch
+#torch
 transformers
 google-cloud-translate
-vllm
+#vllm
 tenacity
 text_generation
 accelerate

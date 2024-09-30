@@ -1,5 +1,5 @@
 # Model arguments
-model_name_or_path: mistralai/Mistral-Nemo-Base-2407
+model_name_or_path: natong19/Mistral-Nemo-Instruct-2407-abliterated
 model_revision: main
 torch_dtype: bfloat16
 attn_implementation: flash_attention_2
@@ -21,7 +21,7 @@ gradient_accumulation_steps: 4
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: False
-hub_model_id: Mistral-Nemo-Multilingual-Constitutional-AI-SFT
+hub_model_id: Mistral-Nemo-Instruct-MCAI-SFT
 hub_strategy: every_save
 learning_rate: 2.0e-05
 log_level: info
@@ -31,7 +31,7 @@ lr_scheduler_type: cosine
 max_seq_length: 2048
 max_steps: -1
 num_train_epochs: 1
-output_dir: models/Mistral-Nemo-Multilingual-Constitutional-AI-SFT
+output_dir: models/Mistral-Nemo-Instruct-MCAI-SFT
 overwrite_output_dir: true
 per_device_eval_batch_size: 8
 per_device_train_batch_size: 8
