@@ -1,26 +1,46 @@
 import pandas as pd
 from datasets import load_dataset, Dataset
+from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 from openai import OpenAI
-import os
+import torch
 from tqdm import tqdm
 import gc
-import torch
 
-# Load the test split of the dataset
-dataset = load_dataset("pbevan11/aya_redteaming_consitutional-2", split="test")
+
+def evaluate_harmlessness(question, answer):
+    prompt = template.format(question_body=question, answer_body=answer)
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    evaluation = response.choices[0].message.content.strip().split("\n", 1)
+    return evaluation[0], evaluation[1] if len(evaluation) > 1 else ""
+
+
+def generate_response(llm, tokenizer, prompt):
+    chat = [{"role": "user", "content": prompt}]
+    full_prompt = tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
+    
+    sampling_params = SamplingParams(temperature=0.3, max_tokens=1024)
+    outputs = llm.generate([full_prompt], sampling_params)
+    
+    if outputs:
+        response = outputs[0].outputs[0].text
+        return response.strip()
+    return ""
+
+
+dataset = load_dataset("pbevan11/aya_redteaming_consitutional", split="test")
 df = pd.DataFrame(dataset)
-df = df.loc[df['language']=='English', :].head()
 
-# Model configurations
-model_configs = {
-    # "base_SFT": "pbevan11/Mistral-Nemo-Ultrafeedback-Binarized-SFT",
-    "MCAI_SFT": "pbevan11/Mistral-Nemo-Multilingual-Constitutional-AI-SFT",
-    "MCAI_SFT_DPO": "pbevan11/Mistral-Nemo-Multilingual-Constitutional-AI-SFT-DPO",
-    # "instruct_abliterated": "natong19/Mistral-Nemo-Instruct-2407-abliterated",
+model_config = {
+    "Baseline": "pbevan11/Mistral-Nemo-Baseline-SFT",
+    "MCAI_SFT": "pbevan11/Mistral-Nemo-MCAI-SFT",
+    "MCAI_SFT-DPO": "pbevan11/Mistral-Nemo-MCAI-SFT-DPO",
+    "Instruct": "mistralai/Mistral-Nemo-Instruct-2407",
 }
 
-sampling_params = SamplingParams(temperature=0.3, max_tokens=1024)
 client = OpenAI()
 
 # Evaluation template
@@ -39,26 +59,14 @@ In the subsequent line, please provide a comprehensive explanation of your evalu
 ### Response:
 """
 
-def evaluate_harmlessness(question, answer):
-    prompt = template.format(question_body=question, answer_body=answer)
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    evaluation = response.choices[0].message.content.strip().split("\n", 1)
-    return evaluation[0], evaluation[1] if len(evaluation) > 1 else ""
-
-# Process each model separately
-for model_name, model_path in model_configs.items():
+for model_name, model_path in model_config.items():
     print(f"Processing {model_name}")
-    
-    # Initialize the model
-    model = LLM(model=model_path, max_model_len=2048)
-    
-    # Generate responses
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    llm = LLM(model=model_path, max_model_len=1024)
+
     print("Generating responses")
-    responses = model.generate(df['prompt'].tolist(), sampling_params)
-    df[f'{model_name}_response'] = [r.outputs[0].text for r in responses]
+    df[f'{model_name}_response'] = df['prompt'].apply(lambda x: generate_response(llm, tokenizer, x))
     
     # Evaluate harmlessness
     print("Evaluating harmlessness")
@@ -69,14 +77,14 @@ for model_name, model_path in model_configs.items():
         df.at[idx, f'{model_name}_harmlessness'] = classification
         df.at[idx, f'{model_name}_harmlessness_explanation'] = explanation
     
-    # Clear GPU memory
-    del model
-    torch.cuda.empty_cache()
+    # Clear memory
+    del llm
     gc.collect()
 
-# Convert DataFrame back to Hugging Face Dataset
+if '__index_level_0__' in df.columns:
+    df = df.drop(columns=['__index_level_0__'])
+df = df.reset_index(drop=True)
 new_dataset = Dataset.from_pandas(df)
 
-# Push to Hugging Face Hub
 new_dataset.push_to_hub("pbevan11/aya_redteaming_mcai_eval")
 print("Dataset uploaded successfully to pbevan11/aya_redteaming_mcai_eval")
