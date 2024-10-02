@@ -91,7 +91,9 @@ def main():
     #####################################
     # Load tokenizer and process datasets
     #####################################
-    data_args.truncation_side = "left"  # Truncate from left to ensure we don't lose labels in final turn
+    data_args.truncation_side = (
+        "left"  # Truncate from left to ensure we don't lose labels in final turn
+    )
     tokenizer = get_tokenizer(model_args, data_args)
 
     #####################
@@ -129,17 +131,29 @@ def main():
     # Replace column names with what TRL needs, text_chosen -> chosen and text_rejected -> rejected
     for split in ["train", "test"]:
         raw_datasets[split] = raw_datasets[split].rename_columns(
-            {"text_prompt": "prompt", "text_chosen": "chosen", "text_rejected": "rejected"}
+            {
+                "text_prompt": "prompt",
+                "text_chosen": "chosen",
+                "text_rejected": "rejected",
+            }
         )
 
     # Log a few random samples from the training set:
     for index in random.sample(range(len(raw_datasets["train"])), 3):
-        logger.info(f"Prompt sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['prompt']}")
-        logger.info(f"Chosen sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['chosen']}")
-        logger.info(f"Rejected sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['rejected']}")
+        logger.info(
+            f"Prompt sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['prompt']}"
+        )
+        logger.info(
+            f"Chosen sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['chosen']}"
+        )
+        logger.info(
+            f"Rejected sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['rejected']}"
+        )
 
     torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
+        model_args.torch_dtype
+        if model_args.torch_dtype in ["auto", None]
+        else getattr(torch, model_args.torch_dtype)
     )
     quantization_config = get_quantization_config(model_args)
 
@@ -156,14 +170,18 @@ def main():
     model = model_args.model_name_or_path
     if is_adapter_model(model, model_args.model_revision) is True:
         logger.info(f"Loading SFT adapter for {model_args.model_name_or_path=}")
-        peft_config = PeftConfig.from_pretrained(model_args.model_name_or_path, revision=model_args.model_revision)
+        peft_config = PeftConfig.from_pretrained(
+            model_args.model_name_or_path, revision=model_args.model_revision
+        )
         model_kwargs = dict(
             revision=model_args.base_model_revision,
             trust_remote_code=model_args.trust_remote_code,
             attn_implementation=model_args.attn_implementation,
             torch_dtype=torch_dtype,
             use_cache=False if training_args.gradient_checkpointing else True,
-            device_map=get_kbit_device_map() if quantization_config is not None else None,
+            device_map=get_kbit_device_map()
+            if quantization_config is not None
+            else None,
             quantization_config=quantization_config,
         )
         base_model = AutoModelForCausalLM.from_pretrained(

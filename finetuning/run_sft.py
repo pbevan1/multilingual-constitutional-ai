@@ -106,7 +106,9 @@ def main():
     #######################
     logger.info("*** Load pretrained model ***")
     torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
+        model_args.torch_dtype
+        if model_args.torch_dtype in ["auto", None]
+        else getattr(torch, model_args.torch_dtype)
     )
     quantization_config = get_quantization_config(model_args)
 
@@ -122,8 +124,13 @@ def main():
 
     model = model_args.model_name_or_path
     # For ChatML we need to add special tokens and resize the embedding layer
-    if "<|im_start|>" in tokenizer.chat_template and "gemma-tokenizer-chatml" not in tokenizer.name_or_path:
-        model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+    if (
+        "<|im_start|>" in tokenizer.chat_template
+        and "gemma-tokenizer-chatml" not in tokenizer.name_or_path
+    ):
+        model = AutoModelForCausalLM.from_pretrained(
+            model_args.model_name_or_path, **model_kwargs
+        )
         model, tokenizer = setup_chat_format(model, tokenizer)
         model_kwargs = None
 
@@ -146,7 +153,9 @@ def main():
     # Decontaminate benchmarks
     ##########################
     num_raw_train_samples = len(raw_datasets["train"])
-    raw_datasets = raw_datasets.filter(decontaminate_humaneval, batched=True, batch_size=10_000, num_proc=1)
+    raw_datasets = raw_datasets.filter(
+        decontaminate_humaneval, batched=True, batch_size=10_000, num_proc=1
+    )
     num_filtered_train_samples = num_raw_train_samples - len(raw_datasets["train"])
     logger.info(
         f"Decontaminated {num_filtered_train_samples} ({num_filtered_train_samples/num_raw_train_samples * 100:.2f}%) samples from the training set."
@@ -155,9 +164,13 @@ def main():
     train_dataset = raw_datasets["train"]
     eval_dataset = raw_datasets["test"]
 
-    with training_args.main_process_first(desc="Log a few random samples from the processed training set"):
+    with training_args.main_process_first(
+        desc="Log a few random samples from the processed training set"
+    ):
         for index in random.sample(range(len(raw_datasets["train"])), 3):
-            logger.info(f"Sample {index} of the processed training set:\n\n{raw_datasets['train'][index]['text']}")
+            logger.info(
+                f"Sample {index} of the processed training set:\n\n{raw_datasets['train'][index]['text']}"
+            )
 
     ########################
     # Initialize the Trainer
