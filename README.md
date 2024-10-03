@@ -10,7 +10,8 @@
 
 This work explores the application of Constitutional AI (CAI) techniques in a multilingual context. This work covers 8 languages (Arabic, Filipino, French, Hindi, English, Russian, Serbian, Spanish).
 
-## How to navigate this project:
+## How to navigate this project
+
 * `construct_principles.ipynb` is a notebook that walks through the adaptation of Anthropic's constitution to create targeted critiques and revisions to the [Aya redteaming](https://huggingface.co/datasets/CohereForAI/aya_redteaming) dataset.
 * `create_ultrafeedback_multilingual.py` is a script to translate Ultrafeedback Binarized into our 8 languages using NLLB-3.3B.
 * `generate_critiques_revisions.py` is an optimised vLLM script which generates the constitutional preference pairs via critiquing and revising the LLM output.
