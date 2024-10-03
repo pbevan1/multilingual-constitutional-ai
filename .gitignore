@@ -2,6 +2,8 @@ data/translated_critiques_revisions.csv
 test.py
 data/ultrafeedback_binarized_translations/*
 credentials/*
+wandb/*
+.ruff_cache/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

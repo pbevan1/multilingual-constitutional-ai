@@ -5,6 +5,7 @@ import json
 from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer, HfArgumentParser
 from vllm import LLM, SamplingParams
+from tqdm import tqdm
 
 
 @dataclass
@@ -13,9 +14,9 @@ class Args:
     max_new_tokens: int = 1024
     temperature: float = 0.3
     constitution_dataset: str = "pbevan11/aya_redteaming_consitutional"
-    repo_id: str = "multilingual-constitutional-preference-pairs-2"
+    repo_id: str = "multilingual-constitutional-preference-pairs"
     push_to_hub: bool = True
-    tensor_parallel_size: int = 8
+    tensor_parallel_size: int = 1
 
 
 def generate_text(llm, prompt):
@@ -81,7 +82,7 @@ def main():
         tensor_parallel_size=args.tensor_parallel_size,
     )
 
-    for i in range(len(ds)):
+    for i in tqdm(range(len(ds)), desc="Processing data"):
         try:
             prompt = all_data["prompt"][i]
             language = all_data["language"][i]
