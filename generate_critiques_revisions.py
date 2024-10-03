@@ -14,7 +14,7 @@ class Args:
     max_new_tokens: int = 1024
     temperature: float = 0.3
     constitution_dataset: str = "pbevan11/aya_redteaming_consitutional"
-    repo_id: str = "multilingual-constitutional-preference-pairs"
+    repo_id: str = "multilingual-constitutional-preference-pairs-2"
     push_to_hub: bool = True
     tensor_parallel_size: int = 1
 
