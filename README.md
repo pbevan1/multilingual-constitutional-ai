@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="/Users/pbu5262/Documents/python_scripts/multilingual-constitutional-ai/assets/robot_image.jpg" width="300">
+  <img src="assets/robot_image.jpg" width="300">
 </p>
 
 <p align="center">
