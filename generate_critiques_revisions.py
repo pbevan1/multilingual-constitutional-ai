@@ -110,6 +110,13 @@ def main():
                         "content": example["revision_response"].strip(),
                     },
                 ],
+                "messages": [
+                    {"role": "user", "content": example["init_prompt"].strip()},
+                    {
+                        "role": "assistant",
+                        "content": example["revision_response"].strip(),
+                    },
+                ],
                 "rejected": [
                     {"role": "user", "content": example["init_prompt"].strip()},
                     {"role": "assistant", "content": example["init_response"].strip()},
