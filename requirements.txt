@@ -1,6 +1,7 @@
 datasets
 ipywidgets
 jinja2
+matplotlib
 pandas
 torch
 transformers
