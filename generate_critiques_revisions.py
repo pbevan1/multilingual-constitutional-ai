@@ -7,7 +7,6 @@ from transformers import AutoTokenizer, HfArgumentParser
 from vllm import LLM, SamplingParams
 from tqdm import tqdm
 
-
 @dataclass
 class Args:
     model: str = "natong19/Mistral-Nemo-Instruct-2407-abliterated"
@@ -18,49 +17,67 @@ class Args:
     push_to_hub: bool = True
     tensor_parallel_size: int = 1
 
+def generate_texts(llm, prompts):
+    outputs = llm.generate(prompts, sampling_params)
+    return [output.outputs[0].text.strip() if output.outputs else "" for output in outputs]
 
-def generate_text(llm, prompt):
-    outputs = llm.generate([prompt], sampling_params)
-    if outputs:
-        return outputs[0].outputs[0].text.strip()
-    return ""
+def process_texts(all_data, llm, tokenizer):
+    all_results = []
+    batch_size = 1000
 
+    for i in tqdm(range(0, len(all_data['prompt']), batch_size), desc="Processing batches"):
+        batch_slice = slice(i, i + batch_size)
+        batch_prompts = all_data['prompt'][batch_slice]
+        batch_languages = all_data['language'][batch_slice]
 
-def process_text(i, prompt, language, llm, tokenizer):
-    # row_critiques = critiques_eng[i] if language == 'English' else critiques_translated[i]
-    row_revisions = (
-        revisions_eng[i] if language == "English" else revisions_translated[i]
-    )
+        init_prompts = []
+        revision_prompts = []
 
-    chat = []
-    row = {"language": language}
+        for j, (prompt, language) in enumerate(zip(batch_prompts, batch_languages)):
+            row_revisions = revisions_eng[i+j] if language == "English" else revisions_translated[i+j]
+            
+            system_chat = system_chats.get(language, [])
+            system_chat = [item for sublist in system_chat for item in sublist]
 
-    system_chat = system_chats.get(language, [])
-    system_chat = [item for sublist in system_chat for item in sublist]
+            # Prepare initial prompt
+            init_chat = system_chat + [{"role": "user", "content": prompt}]
+            init_prompts.append(tokenizer.apply_chat_template(init_chat, tokenize=False, add_generation_prompt=True))
 
-    for prompt_key, response_key, next_prompt_fn in [
-        ("init_prompt", "init_response", lambda: random.choice(row_revisions)),
-        # ("critic_prompt", "critic_response", lambda: random.choice(row_revisions)),
-        ("revision_prompt", "revision_response", lambda: None),
-    ]:
-        chat.append({"role": "user", "content": prompt})
-        full_prompt = system_chat + chat
-        formatted_prompt = tokenizer.apply_chat_template(
-            full_prompt, tokenize=False, add_generation_prompt=True
-        )
-        completion = generate_text(llm, formatted_prompt)
+            # Prepare revision prompt
+            revision_prompt = random.choice(row_revisions)
+            revision_chat = system_chat + [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": ""},  # Placeholder for init_response
+                {"role": "user", "content": revision_prompt}
+            ]
+            revision_prompts.append((revision_prompt, revision_chat))
 
-        for stop_seq in STOP_SEQ:
-            if completion.endswith(stop_seq):
-                completion = completion[: -len(stop_seq)].rstrip()
+        # Generate initial responses
+        init_responses = generate_texts(llm, init_prompts)
 
-        chat.append({"role": "assistant", "content": completion})
-        row[prompt_key] = prompt
-        row[response_key] = completion
-        prompt = next_prompt_fn()
+        # Update revision prompts with initial responses and generate revision responses
+        final_revision_prompts = []
+        for init_response, (revision_prompt, revision_chat) in zip(init_responses, revision_prompts):
+            revision_chat[1]["content"] = init_response  # Update placeholder
+            final_revision_prompts.append(tokenizer.apply_chat_template(revision_chat, tokenize=False, add_generation_prompt=True))
 
-    return i, len(tokenizer.encode(chat[-1]["content"])), row
+        revision_responses = generate_texts(llm, final_revision_prompts)
 
+        # Process results
+        for j, (prompt, language, init_response, revision_prompt, revision_response) in enumerate(zip(
+            batch_prompts, batch_languages, init_responses, 
+            [rp for rp, _ in revision_prompts], revision_responses
+        )):
+            row = {
+                "language": language,
+                "init_prompt": prompt.strip(),
+                "init_response": init_response.strip(),
+                "revision_prompt": revision_prompt.strip(),
+                "revision_response": revision_response.strip(),
+            }
+            all_results.append((i+j, len(tokenizer.encode(revision_response)), row))
+
+    return all_results
 
 def process_results(results):
     all_data = defaultdict(list)
@@ -71,31 +88,19 @@ def process_results(results):
                 all_data[key].append(value)
     return Dataset.from_dict(all_data)
 
-
 def main():
-    all_results = []
     all_data = ds[:]
-
+    
     llm = LLM(
         model=args.model,
         max_model_len=8192,
         tensor_parallel_size=args.tensor_parallel_size,
     )
 
-    for i in tqdm(range(len(ds)), desc="Processing data"):
-        try:
-            prompt = all_data["prompt"][i]
-            language = all_data["language"][i]
-            result = process_text(i, prompt, language, llm, tokenizer)
-            if result:
-                all_results.append(result)
-        except Exception as e:
-            print(f"Error processing row {i}: {str(e)}")
-
+    all_results = process_texts(all_data, llm, tokenizer)
     processed_dataset = process_results(all_results)
 
     if processed_dataset:
-
         def process(example):
             return {
                 "language": example["language"],
@@ -105,17 +110,11 @@ def main():
                 "revision_response": example["revision_response"].strip(),
                 "chosen": [
                     {"role": "user", "content": example["init_prompt"].strip()},
-                    {
-                        "role": "assistant",
-                        "content": example["revision_response"].strip(),
-                    },
+                    {"role": "assistant", "content": example["revision_response"].strip()},
                 ],
                 "messages": [
                     {"role": "user", "content": example["init_prompt"].strip()},
-                    {
-                        "role": "assistant",
-                        "content": example["revision_response"].strip(),
-                    },
+                    {"role": "assistant", "content": example["revision_response"].strip()},
                 ],
                 "rejected": [
                     {"role": "user", "content": example["init_prompt"].strip()},
@@ -123,20 +122,13 @@ def main():
                 ],
             }
 
-        post_ds = processed_dataset.map(
-            process, remove_columns=processed_dataset.column_names
-        )
+        post_ds = processed_dataset.map(process, remove_columns=processed_dataset.column_names)
         shuffled_ds = post_ds.shuffle(seed=42)
 
         if args.push_to_hub:
             midpoint = len(shuffled_ds) // 2
-            shuffled_ds.select(range(midpoint)).push_to_hub(
-                args.repo_id, split="train_sft"
-            )
-            shuffled_ds.select(range(midpoint, len(shuffled_ds))).push_to_hub(
-                args.repo_id, split="train_prefs"
-            )
-
+            shuffled_ds.select(range(midpoint)).push_to_hub(args.repo_id, split="train_sft")
+            shuffled_ds.select(range(midpoint, len(shuffled_ds))).push_to_hub(args.repo_id, split="train_prefs")
 
 if __name__ == "__main__":
     parser = HfArgumentParser((Args,))
@@ -146,28 +138,17 @@ if __name__ == "__main__":
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
     ds = load_dataset(args.constitution_dataset)["train"]
-    # ds = ds.filter(lambda example: example['language'] == 'English').select(range(20))
-
-    # critiques_eng = ds['all_critiques_eng']
     revisions_eng = ds["all_revisions_eng"]
-    # critiques_translated = ds['all_critiques_translated']
     revisions_translated = ds["all_revisions_translated"]
 
     system_chats = {}
     for language in set(ds["language"]):
         with open(f"data/few_shot_translations/hf_fewshot_{language}.txt", "r") as f:
             sys_cht_full = json.load(f)
-            # Removing critiques
-            new_sys_cht_full = []
-            for list_of_dicts in sys_cht_full:
-                new_list = [
-                    list_of_dicts[0],
-                    list_of_dicts[1],
-                    list_of_dicts[4],
-                    list_of_dicts[5],
-                ]
-                new_sys_cht_full.append(new_list)
-            ####
+            new_sys_cht_full = [
+                [list_of_dicts[0], list_of_dicts[1], list_of_dicts[4], list_of_dicts[5]]
+                for list_of_dicts in sys_cht_full
+            ]
             system_chats[language] = new_sys_cht_full[0:3]
 
     STOP_SEQ = ["User:", "###", "<|endoftext|>"]

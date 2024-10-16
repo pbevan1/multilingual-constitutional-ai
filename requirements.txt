@@ -8,8 +8,9 @@ transformers
 vllm
 tenacity
 text_generation
-accelerate
-deepspeed
+#accelerate
+#deepspeed
 huggingface-hub
 wandb
 wheel
+sacrebleu==2.4.3
